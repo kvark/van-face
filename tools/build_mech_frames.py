@@ -27,6 +27,11 @@ from pathlib import Path
 
 from PIL import Image, ImageEnhance
 
+try:
+    import numpy as np
+except ImportError:
+    np = None
+
 
 # pebble64: every channel is 2 bits, so allowed values are {0, 85, 170, 255}.
 PEBBLE64_PALETTE = [
@@ -34,6 +39,21 @@ PEBBLE64_PALETTE = [
     for v in (((i >> 4) & 0x3) * 85, ((i >> 2) & 0x3) * 85, (i & 0x3) * 85)
 ]
 _PADDED_PALETTE = PEBBLE64_PALETTE + [0] * (256 * 3 - len(PEBBLE64_PALETTE))
+
+
+def _apply_gamma(im: Image.Image, gamma: float) -> Image.Image:
+    """Apply pixel ← pixel ** gamma. gamma < 1 lifts mid-tones without
+    clipping highlights — perfect for pulling pebble64-quantizable detail
+    out of the dim Vangers shop videos."""
+    if gamma == 1.0:
+        return im
+    if np is None:
+        # Fallback to PIL point() with a precomputed LUT.
+        lut = [round((i / 255.0) ** gamma * 255) for i in range(256)]
+        return im.point(lut * 3 if im.mode == "RGB" else lut)
+    arr = np.asarray(im, dtype=np.float32) / 255.0
+    boosted = np.clip(arr ** gamma, 0.0, 1.0) * 255.0
+    return Image.fromarray(boosted.astype(np.uint8), mode=im.mode)
 
 
 def extract_frames(video: Path, tmp: Path, n_frames: int, width: int, height: int,
@@ -59,10 +79,17 @@ def extract_frames(video: Path, tmp: Path, n_frames: int, width: int, height: in
     return sorted(tmp.glob("frame_*.png"))
 
 
-def quantize_to_pebble64(im: Image.Image, brightness: float, dither: bool) -> Image.Image:
+def quantize_to_pebble64(im: Image.Image, gamma: float, saturation: float, dither: bool) -> Image.Image:
     rgb = im.convert("RGB")
-    if brightness != 1.0:
-        rgb = ImageEnhance.Brightness(rgb).enhance(brightness)
+    if saturation != 1.0:
+        # Push colors toward the saturated corners of pebble64's RGB cube
+        # *before* quantization. The PT2's reflective memory-LCD has narrow
+        # effective gamut, and mid-tone palette entries (RGB values of 85 or
+        # 170) collapse to similar pale grays on the panel. Saturating first
+        # nudges pixels toward the {0, 255} corners so they survive.
+        rgb = ImageEnhance.Color(rgb).enhance(saturation)
+    if gamma != 1.0:
+        rgb = _apply_gamma(rgb, gamma)
     palette_image = Image.new("P", (1, 1))
     palette_image.putpalette(_PADDED_PALETTE)
     # Floyd-Steinberg against the sparse pebble64 grid pushes pixels toward the
@@ -83,9 +110,16 @@ def main() -> None:
     ap.add_argument("--zoom", type=float, default=1.25,
                     help="scale factor applied before center-crop; >1 makes the mech "
                          "bigger in frame at the cost of cropping turntable edges")
-    ap.add_argument("--brightness", type=float, default=1.4,
-                    help="multiplier applied before quantization; >1 lifts the mid-tones "
-                         "that pebble64 would otherwise crush to black")
+    ap.add_argument("--gamma", type=float, default=0.4,
+                    help="gamma curve applied before quantization. <1 lifts mid-tones "
+                         "(lighter image), >1 darkens. The Vangers shop videos are very "
+                         "dim, and pebble64's coarse {0,85,170,255} grid otherwise snaps "
+                         "most of the mech body to 85. Default 0.4 maps source 60 to ~170.")
+    ap.add_argument("--saturation", type=float, default=1.6,
+                    help="saturation multiplier applied before gamma+quantize. "
+                         "Pushes pixels toward the saturated corners of the pebble64 "
+                         "RGB cube so they survive the PT2 panel's narrow effective "
+                         "gamut. Default 1.6 noticeably amps the color without overdoing it.")
     ap.add_argument("--dither", action="store_true",
                     help="enable Floyd-Steinberg dithering (default: off, cleaner look)")
     args = ap.parse_args()
@@ -95,7 +129,7 @@ def main() -> None:
         extracted = extract_frames(args.video, Path(tmp), args.frames, args.width, args.height, args.zoom)
         # ffmpeg may overshoot by one when the selection filter rounds; take exactly N.
         for i, src in enumerate(extracted[: args.frames]):
-            quant = quantize_to_pebble64(Image.open(src), args.brightness, args.dither)
+            quant = quantize_to_pebble64(Image.open(src), args.gamma, args.saturation, args.dither)
             out = args.out_dir / f"{args.prefix}_{i + 1:02d}.png"
             quant.save(out)
             print(f"wrote {out} ({out.stat().st_size} bytes)", file=sys.stderr)

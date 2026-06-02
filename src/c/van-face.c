@@ -102,6 +102,16 @@ static void update_time(void) {
   text_layer_set_text(s_time_layer, s_time_text);
 }
 
+// Visible state cue. White when inactive (default), amber-ish when active.
+// On the PT2 panel the difference reads clearly even without the backlight.
+static void apply_active_visual(void) {
+  if (!s_time_layer) return;
+  GColor c = s_active
+    ? COLOR_FALLBACK(GColorChromeYellow, GColorWhite)
+    : COLOR_FALLBACK(GColorLightGray,     GColorWhite);
+  text_layer_set_text_color(s_time_layer, c);
+}
+
 static void fast_frame_cb(void *ctx) {
   s_fast_timer = NULL;
   if (!s_active) return;
@@ -112,6 +122,7 @@ static void fast_frame_cb(void *ctx) {
 static void deactivate_cb(void *ctx) {
   s_active_timeout = NULL;
   s_active = false;
+  apply_active_visual();
   if (s_fast_timer) {
     app_timer_cancel(s_fast_timer);
     s_fast_timer = NULL;
@@ -129,8 +140,10 @@ static void deactivate_cb(void *ctx) {
 }
 
 static void activate(void) {
+  bool was_inactive = !s_active;
   s_active = true;
   s_seconds_since_slow_advance = 0;
+  if (was_inactive) apply_active_visual();
   if (!s_fast_timer) {
     s_fast_timer = app_timer_register(ACTIVE_FRAME_MS, fast_frame_cb, NULL);
   }
@@ -215,11 +228,10 @@ static void window_load(Window *window) {
   int16_t time_h = bounds.size.h - time_top;
   s_time_layer = text_layer_create(GRect(0, time_top, bounds.size.w, time_h));
   text_layer_set_background_color(s_time_layer, GColorClear);
-  text_layer_set_text_color(s_time_layer, GColorWhite);
   text_layer_set_text_alignment(s_time_layer, GTextAlignmentCenter);
   text_layer_set_font(s_time_layer, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
   layer_add_child(root, text_layer_get_layer(s_time_layer));
-
+  apply_active_visual();
   update_time();
 }
 

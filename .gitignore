@@ -2,3 +2,4 @@
 /package-lock.json
 /.lock-waf_linux_build
 /node_modules
+__pycache__/
