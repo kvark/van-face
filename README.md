@@ -4,7 +4,13 @@ A Pebble watchface that shows a rotating [Vangers](https://en.wikipedia.org/wiki
 
 ![watchface screenshot](screenshots/emery-zoom.png)
 
-The rotation frames are extracted from the original Vangers shop videos (`mech00.avi`…`mech14.avi` in the game's `resource/video/` dir), composited onto black, quantized to Pebble's 64-color palette, and shipped as individual `png` resources that the C app swaps on tick.
+The rotation frames are extracted from the original Vangers shop videos (`mech*.avi` in the game's `resource/video/` dir). The game ships three escave-faction color variants per vehicle, and the face routes them by time of day:
+
+- **02:00 – 12:00** — green (m1–m5, Zeex variants)
+- **12:00 – 18:00** — yellow / orange (m6–m10, Khox variants)
+- **18:00 – 02:00** — blue (m11–m14, Fee base)
+
+In random or sequential modes the vehicle is re-picked when the color group rolls over. Pinned-vehicle mode ignores the clock.
 
 ## Quickstart
 
@@ -30,10 +36,10 @@ pebble install --phone <phone-ip>
 
 The face uses [Clay](https://github.com/pebble-dev/clay) for in-app configuration. Long-press the watchface tile in the rePebble app → Settings:
 
-- **Vehicle** — Random (new pick each wake), Sequential (cycles m1 → m14), or pin a specific mechos
+- **Vehicle** — *Random* (new pick each wake, within the current color group), *Sequential* (cycles within the current color group), or pin a specific mechos
 - **Idle rotation** — how fast the mech spins when you're not looking (1 s … 1 min between frame advances; off disables)
 
-Tap or wrist-raise puts the face into "active" mode for 5 s: the mech spins at **4 fps**. On deactivation, in random/sequential modes, the next vehicle is picked.
+Tap or wrist-raise puts the face into "active" mode for 5 s: the mech spins at **4 fps** and the time text turns amber. On deactivation, in random/sequential modes, the next vehicle is picked.
 
 ## Mechos roster
 
@@ -59,37 +65,18 @@ The 14 mechous in the game (`m1`–`m14`), with their Vangers nicknames as they 
 ## Asset pipeline
 
 ```sh
-# Regenerate frames for one mechos (rePebble nix-shell has ffmpeg + Pillow)
+# Regenerate frames for one mechos (rePebble nix-shell has ffmpeg + Pillow).
+# Variant suffix on the source filename picks the escave color:
+#   mech06.avi  = blue   (Fee, base)
+#   mech062.avi = green  (Zeex)
+#   mech063.avi = orange (Khox)
 python tools/build_mech_frames.py \
-  /path/to/VangersData/resource/video/mech06.avi \
+  /path/to/VangersData/resource/video/mech062.avi \
   resources/images \
-  --frames 6 --brightness 1.5 --zoom 1.25 --prefix m1
+  --frames 6 --zoom 1.25 --prefix m1
 ```
 
-Each frame is a 200×150 paletted PNG (~3 KB on flash). 14 mechos × 6 frames ≈ 200 KB — fits emery's 256 KB resource budget with headroom.
-
-## Layout
-
-```
-┌────────────────────┐
-│ ████████ mech ████ │   ← 200×150 paletted bitmap (top, centered)
-│ ████ on turntable ██│
-│                    │
-│   ██  ██:██  ██    │   ← BITHAM_42_BOLD time (bottom strip ~78 px)
-└────────────────────┘
-```
-
-## Project layout
-
-```
-src/c/van-face.c          watchapp (window, bitmap layer, time, settings)
-src/pkjs/index.js         3-line Clay loader (phone-side)
-src/pkjs/config.js        Clay form definition
-resources/images/         84 paletted PNG frames (m{1..14}_{01..06}.png)
-tools/build_mech_frames.py  ffmpeg + Pillow extraction pipeline
-package.json              Pebble manifest (UUID, capabilities, messageKeys, resources)
-shell.nix                 Nix dev shell — patchelfs the SDK toolchain for NixOS
-```
+Each frame is a 200×150 paletted PNG (~2–3 KB on flash). 14 mechos × 6 frames ≈ 180 KB — fits emery's 256 KB resource budget with headroom.
 
 ## Round-watch support (TODO)
 
@@ -97,7 +84,7 @@ Currently only `emery` is tuned. The 200-wide bitmaps don't fit chalk (180×180)
 
 ## Publishing (TODO)
 
-`pebble publish` from the project dir walks through metadata creation and uploads to `appstore-api.repebble.com`. Needs a small icon, large icon, and platform screenshots. Drafts live at <https://developer.repebble.com/dashboard>; add `--is-published` to release immediately.
+`pebble publish` from the project dir walks through metadata creation and uploads to `appstore-api.repebble.com`. Needs a small icon, large icon, and platform screenshots. Drafts live at <https://developer.repebble.com/dashboard>; add `--is-published` to release immediately. Screenshot filenames must be `<platform>_<rest>.png` for the publisher to infer their platform.
 
 ## Acknowledgements
 

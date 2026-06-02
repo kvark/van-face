@@ -43,12 +43,10 @@ _PADDED_PALETTE = PEBBLE64_PALETTE + [0] * (256 * 3 - len(PEBBLE64_PALETTE))
 
 def _apply_gamma(im: Image.Image, gamma: float) -> Image.Image:
     """Apply pixel ← pixel ** gamma. gamma < 1 lifts mid-tones without
-    clipping highlights — perfect for pulling pebble64-quantizable detail
-    out of the dim Vangers shop videos."""
+    clipping highlights — useful for unusually dim source variants."""
     if gamma == 1.0:
         return im
     if np is None:
-        # Fallback to PIL point() with a precomputed LUT.
         lut = [round((i / 255.0) ** gamma * 255) for i in range(256)]
         return im.point(lut * 3 if im.mode == "RGB" else lut)
     arr = np.asarray(im, dtype=np.float32) / 255.0
@@ -83,18 +81,13 @@ def quantize_to_pebble64(im: Image.Image, gamma: float, saturation: float, dithe
     rgb = im.convert("RGB")
     if saturation != 1.0:
         # Push colors toward the saturated corners of pebble64's RGB cube
-        # *before* quantization. The PT2's reflective memory-LCD has narrow
-        # effective gamut, and mid-tone palette entries (RGB values of 85 or
-        # 170) collapse to similar pale grays on the panel. Saturating first
-        # nudges pixels toward the {0, 255} corners so they survive.
+        # before quantization. Default 1.0 leaves source untouched (the
+        # game's shop videos are already faction-colored).
         rgb = ImageEnhance.Color(rgb).enhance(saturation)
     if gamma != 1.0:
         rgb = _apply_gamma(rgb, gamma)
     palette_image = Image.new("P", (1, 1))
     palette_image.putpalette(_PADDED_PALETTE)
-    # Floyd-Steinberg against the sparse pebble64 grid pushes pixels toward the
-    # darker entries (most palette steps are darker than mid-grey). NONE keeps
-    # the mech crisp.
     method = Image.Dither.FLOYDSTEINBERG if dither else Image.Dither.NONE
     return rgb.quantize(palette=palette_image, dither=method)
 
@@ -110,16 +103,13 @@ def main() -> None:
     ap.add_argument("--zoom", type=float, default=1.25,
                     help="scale factor applied before center-crop; >1 makes the mech "
                          "bigger in frame at the cost of cropping turntable edges")
-    ap.add_argument("--gamma", type=float, default=0.4,
+    ap.add_argument("--gamma", type=float, default=1.0,
                     help="gamma curve applied before quantization. <1 lifts mid-tones "
-                         "(lighter image), >1 darkens. The Vangers shop videos are very "
-                         "dim, and pebble64's coarse {0,85,170,255} grid otherwise snaps "
-                         "most of the mech body to 85. Default 0.4 maps source 60 to ~170.")
-    ap.add_argument("--saturation", type=float, default=1.6,
-                    help="saturation multiplier applied before gamma+quantize. "
-                         "Pushes pixels toward the saturated corners of the pebble64 "
-                         "RGB cube so they survive the PT2 panel's narrow effective "
-                         "gamut. Default 1.6 noticeably amps the color without overdoing it.")
+                         "(lighter), >1 darkens. 1.0 = keep source brightness, which "
+                         "matches the in-game shop display. Use 0.4–0.5 if a particular "
+                         "vehicle's variant comes out too dim on hardware.")
+    ap.add_argument("--saturation", type=float, default=1.0,
+                    help="saturation multiplier. 1.0 = leave source colors alone.")
     ap.add_argument("--dither", action="store_true",
                     help="enable Floyd-Steinberg dithering (default: off, cleaner look)")
     args = ap.parse_args()
