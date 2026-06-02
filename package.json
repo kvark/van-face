@@ -1,0 +1,461 @@
+{
+  "name": "van-face",
+  "author": "MakeAwesomeHappen",
+  "version": "1.0.0",
+  "keywords": [
+    "pebble-app"
+  ],
+  "private": true,
+  "dependencies": {
+    "@rebble/clay": "^1.0.7"
+  },
+  "pebble": {
+    "displayName": "van-face",
+    "uuid": "7ebee9bc-4c7c-40d1-a1c6-1d8bbea046cd",
+    "sdkVersion": "3",
+    "enableMultiJS": true,
+    "targetPlatforms": [
+      "aplite",
+      "basalt",
+      "chalk",
+      "diorite",
+      "emery",
+      "flint",
+      "gabbro"
+    ],
+    "watchapp": {
+      "watchface": true
+    },
+    "messageKeys": [
+      "Vehicle",
+      "FrameAdvanceSeconds"
+    ],
+    "resources": {
+      "media": [
+        {
+          "type": "png",
+          "name": "M1_01",
+          "file": "images/m1_01.png"
+        },
+        {
+          "type": "png",
+          "name": "M1_02",
+          "file": "images/m1_02.png"
+        },
+        {
+          "type": "png",
+          "name": "M1_03",
+          "file": "images/m1_03.png"
+        },
+        {
+          "type": "png",
+          "name": "M1_04",
+          "file": "images/m1_04.png"
+        },
+        {
+          "type": "png",
+          "name": "M1_05",
+          "file": "images/m1_05.png"
+        },
+        {
+          "type": "png",
+          "name": "M1_06",
+          "file": "images/m1_06.png"
+        },
+        {
+          "type": "png",
+          "name": "M2_01",
+          "file": "images/m2_01.png"
+        },
+        {
+          "type": "png",
+          "name": "M2_02",
+          "file": "images/m2_02.png"
+        },
+        {
+          "type": "png",
+          "name": "M2_03",
+          "file": "images/m2_03.png"
+        },
+        {
+          "type": "png",
+          "name": "M2_04",
+          "file": "images/m2_04.png"
+        },
+        {
+          "type": "png",
+          "name": "M2_05",
+          "file": "images/m2_05.png"
+        },
+        {
+          "type": "png",
+          "name": "M2_06",
+          "file": "images/m2_06.png"
+        },
+        {
+          "type": "png",
+          "name": "M3_01",
+          "file": "images/m3_01.png"
+        },
+        {
+          "type": "png",
+          "name": "M3_02",
+          "file": "images/m3_02.png"
+        },
+        {
+          "type": "png",
+          "name": "M3_03",
+          "file": "images/m3_03.png"
+        },
+        {
+          "type": "png",
+          "name": "M3_04",
+          "file": "images/m3_04.png"
+        },
+        {
+          "type": "png",
+          "name": "M3_05",
+          "file": "images/m3_05.png"
+        },
+        {
+          "type": "png",
+          "name": "M3_06",
+          "file": "images/m3_06.png"
+        },
+        {
+          "type": "png",
+          "name": "M4_01",
+          "file": "images/m4_01.png"
+        },
+        {
+          "type": "png",
+          "name": "M4_02",
+          "file": "images/m4_02.png"
+        },
+        {
+          "type": "png",
+          "name": "M4_03",
+          "file": "images/m4_03.png"
+        },
+        {
+          "type": "png",
+          "name": "M4_04",
+          "file": "images/m4_04.png"
+        },
+        {
+          "type": "png",
+          "name": "M4_05",
+          "file": "images/m4_05.png"
+        },
+        {
+          "type": "png",
+          "name": "M4_06",
+          "file": "images/m4_06.png"
+        },
+        {
+          "type": "png",
+          "name": "M5_01",
+          "file": "images/m5_01.png"
+        },
+        {
+          "type": "png",
+          "name": "M5_02",
+          "file": "images/m5_02.png"
+        },
+        {
+          "type": "png",
+          "name": "M5_03",
+          "file": "images/m5_03.png"
+        },
+        {
+          "type": "png",
+          "name": "M5_04",
+          "file": "images/m5_04.png"
+        },
+        {
+          "type": "png",
+          "name": "M5_05",
+          "file": "images/m5_05.png"
+        },
+        {
+          "type": "png",
+          "name": "M5_06",
+          "file": "images/m5_06.png"
+        },
+        {
+          "type": "png",
+          "name": "M6_01",
+          "file": "images/m6_01.png"
+        },
+        {
+          "type": "png",
+          "name": "M6_02",
+          "file": "images/m6_02.png"
+        },
+        {
+          "type": "png",
+          "name": "M6_03",
+          "file": "images/m6_03.png"
+        },
+        {
+          "type": "png",
+          "name": "M6_04",
+          "file": "images/m6_04.png"
+        },
+        {
+          "type": "png",
+          "name": "M6_05",
+          "file": "images/m6_05.png"
+        },
+        {
+          "type": "png",
+          "name": "M6_06",
+          "file": "images/m6_06.png"
+        },
+        {
+          "type": "png",
+          "name": "M7_01",
+          "file": "images/m7_01.png"
+        },
+        {
+          "type": "png",
+          "name": "M7_02",
+          "file": "images/m7_02.png"
+        },
+        {
+          "type": "png",
+          "name": "M7_03",
+          "file": "images/m7_03.png"
+        },
+        {
+          "type": "png",
+          "name": "M7_04",
+          "file": "images/m7_04.png"
+        },
+        {
+          "type": "png",
+          "name": "M7_05",
+          "file": "images/m7_05.png"
+        },
+        {
+          "type": "png",
+          "name": "M7_06",
+          "file": "images/m7_06.png"
+        },
+        {
+          "type": "png",
+          "name": "M8_01",
+          "file": "images/m8_01.png"
+        },
+        {
+          "type": "png",
+          "name": "M8_02",
+          "file": "images/m8_02.png"
+        },
+        {
+          "type": "png",
+          "name": "M8_03",
+          "file": "images/m8_03.png"
+        },
+        {
+          "type": "png",
+          "name": "M8_04",
+          "file": "images/m8_04.png"
+        },
+        {
+          "type": "png",
+          "name": "M8_05",
+          "file": "images/m8_05.png"
+        },
+        {
+          "type": "png",
+          "name": "M8_06",
+          "file": "images/m8_06.png"
+        },
+        {
+          "type": "png",
+          "name": "M9_01",
+          "file": "images/m9_01.png"
+        },
+        {
+          "type": "png",
+          "name": "M9_02",
+          "file": "images/m9_02.png"
+        },
+        {
+          "type": "png",
+          "name": "M9_03",
+          "file": "images/m9_03.png"
+        },
+        {
+          "type": "png",
+          "name": "M9_04",
+          "file": "images/m9_04.png"
+        },
+        {
+          "type": "png",
+          "name": "M9_05",
+          "file": "images/m9_05.png"
+        },
+        {
+          "type": "png",
+          "name": "M9_06",
+          "file": "images/m9_06.png"
+        },
+        {
+          "type": "png",
+          "name": "M10_01",
+          "file": "images/m10_01.png"
+        },
+        {
+          "type": "png",
+          "name": "M10_02",
+          "file": "images/m10_02.png"
+        },
+        {
+          "type": "png",
+          "name": "M10_03",
+          "file": "images/m10_03.png"
+        },
+        {
+          "type": "png",
+          "name": "M10_04",
+          "file": "images/m10_04.png"
+        },
+        {
+          "type": "png",
+          "name": "M10_05",
+          "file": "images/m10_05.png"
+        },
+        {
+          "type": "png",
+          "name": "M10_06",
+          "file": "images/m10_06.png"
+        },
+        {
+          "type": "png",
+          "name": "M11_01",
+          "file": "images/m11_01.png"
+        },
+        {
+          "type": "png",
+          "name": "M11_02",
+          "file": "images/m11_02.png"
+        },
+        {
+          "type": "png",
+          "name": "M11_03",
+          "file": "images/m11_03.png"
+        },
+        {
+          "type": "png",
+          "name": "M11_04",
+          "file": "images/m11_04.png"
+        },
+        {
+          "type": "png",
+          "name": "M11_05",
+          "file": "images/m11_05.png"
+        },
+        {
+          "type": "png",
+          "name": "M11_06",
+          "file": "images/m11_06.png"
+        },
+        {
+          "type": "png",
+          "name": "M12_01",
+          "file": "images/m12_01.png"
+        },
+        {
+          "type": "png",
+          "name": "M12_02",
+          "file": "images/m12_02.png"
+        },
+        {
+          "type": "png",
+          "name": "M12_03",
+          "file": "images/m12_03.png"
+        },
+        {
+          "type": "png",
+          "name": "M12_04",
+          "file": "images/m12_04.png"
+        },
+        {
+          "type": "png",
+          "name": "M12_05",
+          "file": "images/m12_05.png"
+        },
+        {
+          "type": "png",
+          "name": "M12_06",
+          "file": "images/m12_06.png"
+        },
+        {
+          "type": "png",
+          "name": "M13_01",
+          "file": "images/m13_01.png"
+        },
+        {
+          "type": "png",
+          "name": "M13_02",
+          "file": "images/m13_02.png"
+        },
+        {
+          "type": "png",
+          "name": "M13_03",
+          "file": "images/m13_03.png"
+        },
+        {
+          "type": "png",
+          "name": "M13_04",
+          "file": "images/m13_04.png"
+        },
+        {
+          "type": "png",
+          "name": "M13_05",
+          "file": "images/m13_05.png"
+        },
+        {
+          "type": "png",
+          "name": "M13_06",
+          "file": "images/m13_06.png"
+        },
+        {
+          "type": "png",
+          "name": "M14_01",
+          "file": "images/m14_01.png"
+        },
+        {
+          "type": "png",
+          "name": "M14_02",
+          "file": "images/m14_02.png"
+        },
+        {
+          "type": "png",
+          "name": "M14_03",
+          "file": "images/m14_03.png"
+        },
+        {
+          "type": "png",
+          "name": "M14_04",
+          "file": "images/m14_04.png"
+        },
+        {
+          "type": "png",
+          "name": "M14_05",
+          "file": "images/m14_05.png"
+        },
+        {
+          "type": "png",
+          "name": "M14_06",
+          "file": "images/m14_06.png"
+        }
+      ]
+    },
+    "capabilities": [
+      "configurable"
+    ]
+  }
+}
