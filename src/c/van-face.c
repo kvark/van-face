@@ -4,11 +4,16 @@
 #define FRAMES_PER_VEHICLE 6
 #define SETTINGS_KEY 1
 
+// When the user raises their wrist or taps the watch, the face goes into
+// "active" mode: it spins fast and the time shows brightly. After a short
+// idle period it falls back to "inactive" mode (slow rotation) and on the
+// transition it picks the next vehicle (random / sequential modes).
+#define ACTIVE_FRAME_MS    250   // 4 fps while active
+#define ACTIVE_TIMEOUT_MS  5000  // active state expires this long after last tap
+
 #define V(n) { RESOURCE_ID_M##n##_01, RESOURCE_ID_M##n##_02, RESOURCE_ID_M##n##_03, \
                RESOURCE_ID_M##n##_04, RESOURCE_ID_M##n##_05, RESOURCE_ID_M##n##_06 }
 
-// Resource IDs grouped per vehicle. The day-of-year picks the row (when
-// Vehicle == 0), the frame index walks across.
 static const uint32_t VEHICLE_FRAMES[VEHICLE_COUNT][FRAMES_PER_VEHICLE] = {
   V(1),  V(2),  V(3),  V(4),  V(5),  V(6),  V(7),
   V(8),  V(9),  V(10), V(11), V(12), V(13), V(14),
@@ -16,11 +21,13 @@ static const uint32_t VEHICLE_FRAMES[VEHICLE_COUNT][FRAMES_PER_VEHICLE] = {
 
 #undef V
 
-// User-controlled config, mirrored from the Clay config page. Stored as a
-// single blob in persist_storage so adding fields is a one-byte cost.
+// Vehicle mode (from Clay config):
+//   0  = random (day-hash, re-rolled on each deactivation)
+//   1  = sequential (cycles m1..m14, advanced on each deactivation)
+//   2..15 = fixed m(Vehicle-1) — value 2 means m1, 15 means m14
 typedef struct ClaySettings {
-  int32_t Vehicle;              // 0 = random/daily, 1..14 = pin specific mN
-  int32_t FrameAdvanceSeconds;  // 0 = no rotation
+  int32_t Vehicle;
+  int32_t FrameAdvanceSeconds;  // inactive rotation period; 0 = off
 } ClaySettings;
 
 static ClaySettings s_settings;
@@ -33,21 +40,32 @@ static char s_time_text[8];
 
 static int s_vehicle = 0;
 static int s_frame_index = 0;
-static int s_seconds_since_advance = 0;
+static int s_seconds_since_slow_advance = 0;
+static uint32_t s_session_index = 0;  // bumps on each deactivation
 
-static int vehicle_for_today(void) {
+static bool s_active = false;
+static AppTimer *s_active_timeout = NULL;
+static AppTimer *s_fast_timer = NULL;
+
+static int vehicle_for_session(uint32_t session) {
   time_t now = time(NULL);
   struct tm *t = localtime(&now);
-  // Mix yday with year so consecutive days don't pick adjacent vehicles.
-  unsigned seed = (unsigned)t->tm_yday * 2654435761u + (unsigned)t->tm_year;
+  unsigned seed = (unsigned)t->tm_yday * 2654435761u
+                + (unsigned)t->tm_year
+                + session * 2246822519u;
   return (int)(seed % VEHICLE_COUNT);
 }
 
 static int resolve_vehicle(void) {
-  if (s_settings.Vehicle <= 0 || s_settings.Vehicle > VEHICLE_COUNT) {
-    return vehicle_for_today();
+  if (s_settings.Vehicle <= 0) {
+    return vehicle_for_session(s_session_index);
   }
-  return s_settings.Vehicle - 1;  // config exposes 1-indexed mN
+  if (s_settings.Vehicle == 1) {
+    return (int)(s_session_index % VEHICLE_COUNT);
+  }
+  int idx = s_settings.Vehicle - 2;
+  if (idx < 0 || idx >= VEHICLE_COUNT) idx = 0;
+  return idx;
 }
 
 static void load_settings(void) {
@@ -60,19 +78,21 @@ static void save_settings(void) {
   persist_write_data(SETTINGS_KEY, &s_settings, sizeof(s_settings));
 }
 
-// Load one frame's bitmap, freeing the previous one. Only one bitmap is held
-// at a time so we don't blow the 128 KB heap on emery (each 200×150 paletted
-// bitmap is a few KB, but holding all 84 would still be too much).
 static void show_frame(int frame) {
   if (s_current_bitmap) {
     gbitmap_destroy(s_current_bitmap);
     s_current_bitmap = NULL;
   }
   s_current_bitmap = gbitmap_create_with_resource(VEHICLE_FRAMES[s_vehicle][frame]);
-  if (s_current_bitmap) {
+  if (s_current_bitmap && s_mech_layer) {
     bitmap_layer_set_bitmap(s_mech_layer, s_current_bitmap);
     layer_mark_dirty(bitmap_layer_get_layer(s_mech_layer));
   }
+}
+
+static void advance_one_frame(void) {
+  s_frame_index = (s_frame_index + 1) % FRAMES_PER_VEHICLE;
+  show_frame(s_frame_index);
 }
 
 static void update_time(void) {
@@ -82,43 +102,87 @@ static void update_time(void) {
   text_layer_set_text(s_time_layer, s_time_text);
 }
 
+static void fast_frame_cb(void *ctx) {
+  s_fast_timer = NULL;
+  if (!s_active) return;
+  advance_one_frame();
+  s_fast_timer = app_timer_register(ACTIVE_FRAME_MS, fast_frame_cb, NULL);
+}
+
+static void deactivate_cb(void *ctx) {
+  s_active_timeout = NULL;
+  s_active = false;
+  if (s_fast_timer) {
+    app_timer_cancel(s_fast_timer);
+    s_fast_timer = NULL;
+  }
+  // Switch to next vehicle if the mode allows it.
+  if (s_settings.Vehicle <= 1) {  // 0 = random, 1 = sequential
+    s_session_index++;
+    int next = resolve_vehicle();
+    if (next != s_vehicle) {
+      s_vehicle = next;
+      s_frame_index = 0;
+      show_frame(s_frame_index);
+    }
+  }
+}
+
+static void activate(void) {
+  s_active = true;
+  s_seconds_since_slow_advance = 0;
+  if (!s_fast_timer) {
+    s_fast_timer = app_timer_register(ACTIVE_FRAME_MS, fast_frame_cb, NULL);
+  }
+  if (s_active_timeout) {
+    app_timer_reschedule(s_active_timeout, ACTIVE_TIMEOUT_MS);
+  } else {
+    s_active_timeout = app_timer_register(ACTIVE_TIMEOUT_MS, deactivate_cb, NULL);
+  }
+}
+
+static void tap_handler(AccelAxisType axis, int32_t direction) {
+  activate();
+}
+
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   if (units_changed & MINUTE_UNIT) update_time();
   if ((units_changed & DAY_UNIT) && s_settings.Vehicle == 0) {
+    // The day rolling over only matters in random mode — bump the session so
+    // resolve_vehicle re-hashes against the new yday.
+    s_session_index++;
     s_vehicle = resolve_vehicle();
     s_frame_index = 0;
     show_frame(s_frame_index);
   }
-  if (s_settings.FrameAdvanceSeconds > 0 &&
-      ++s_seconds_since_advance >= s_settings.FrameAdvanceSeconds) {
-    s_seconds_since_advance = 0;
-    s_frame_index = (s_frame_index + 1) % FRAMES_PER_VEHICLE;
-    show_frame(s_frame_index);
+  if (!s_active && s_settings.FrameAdvanceSeconds > 0) {
+    if (++s_seconds_since_slow_advance >= s_settings.FrameAdvanceSeconds) {
+      s_seconds_since_slow_advance = 0;
+      advance_one_frame();
+    }
   }
 }
 
 static void inbox_received_callback(DictionaryIterator *iter, void *context) {
-  APP_LOG(APP_LOG_LEVEL_INFO, "inbox_received fired");
   bool changed = false;
   Tuple *v = dict_find(iter, MESSAGE_KEY_Vehicle);
   if (v) {
     s_settings.Vehicle = v->value->int32;
-    APP_LOG(APP_LOG_LEVEL_INFO, "  Vehicle = %ld", (long)s_settings.Vehicle);
     changed = true;
   }
   Tuple *r = dict_find(iter, MESSAGE_KEY_FrameAdvanceSeconds);
   if (r) {
     s_settings.FrameAdvanceSeconds = r->value->int32;
-    APP_LOG(APP_LOG_LEVEL_INFO, "  FrameAdvanceSeconds = %ld", (long)s_settings.FrameAdvanceSeconds);
     changed = true;
   }
   if (changed) {
     save_settings();
-    s_vehicle = resolve_vehicle();
-    APP_LOG(APP_LOG_LEVEL_INFO, "  applied vehicle=%d", s_vehicle);
-    s_frame_index = 0;
-    s_seconds_since_advance = 0;
-    show_frame(s_frame_index);
+    int next = resolve_vehicle();
+    if (next != s_vehicle) {
+      s_vehicle = next;
+      s_frame_index = 0;
+      show_frame(s_frame_index);
+    }
   }
 }
 
@@ -131,9 +195,6 @@ static void window_load(Window *window) {
   s_vehicle = resolve_vehicle();
   s_frame_index = 0;
 
-  // The mech frames have the source video's ≈4:3 aspect (200×150 here). Place
-  // them top-aligned so the watch's spare vertical pixels at the bottom hold
-  // the time text without overlap.
   s_mech_layer = bitmap_layer_create(bounds);
   bitmap_layer_set_compositing_mode(s_mech_layer, GCompOpSet);
   layer_add_child(root, bitmap_layer_get_layer(s_mech_layer));
@@ -148,7 +209,6 @@ static void window_load(Window *window) {
     layer_set_frame(bitmap_layer_get_layer(s_mech_layer), mech_rect);
   }
 
-  // Time fills the strip below the mech.
   GSize fs = s_current_bitmap ? gbitmap_get_bounds(s_current_bitmap).size
                               : (GSize){ bounds.size.w, bounds.size.h / 2 };
   int16_t time_top = fs.h;
@@ -178,14 +238,19 @@ static void init(void) {
     .unload = window_unload,
   });
   window_stack_push(s_window, true);
+
   tick_timer_service_subscribe(SECOND_UNIT, tick_handler);
+  accel_tap_service_subscribe(tap_handler);
 
   app_message_register_inbox_received(inbox_received_callback);
   app_message_open(128, 128);
 }
 
 static void deinit(void) {
+  accel_tap_service_unsubscribe();
   tick_timer_service_unsubscribe();
+  if (s_fast_timer) app_timer_cancel(s_fast_timer);
+  if (s_active_timeout) app_timer_cancel(s_active_timeout);
   window_destroy(s_window);
 }
 
