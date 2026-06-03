@@ -1,7 +1,7 @@
 {
   "name": "van-face",
   "author": "MakeAwesomeHappen",
-  "version": "1.0.3",
+  "version": "1.0.8",
   "keywords": [
     "pebble-app"
   ],
@@ -455,7 +455,8 @@
       ]
     },
     "capabilities": [
-      "configurable"
+      "configurable",
+      "health"
     ]
   }
 }
