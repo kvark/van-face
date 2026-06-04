@@ -64,19 +64,34 @@ The 14 mechous in the game (`m1`–`m14`), with their Vangers nicknames as they 
 
 ## Asset pipeline
 
+Three asset sets, routed to platforms via `targetPlatforms` in `package.json`:
+
+| Set | Size | Quantization | Platforms |
+|---|---|---|---|
+| `large/` | 200×150 | gamma 1.0, pebble64 | `emery`, `gabbro` |
+| `small/` | 144×108 | gamma 1.0, pebble64 | `basalt`, `chalk` |
+| `bw/`    | 144×108 | gamma 0.4 + Floyd–Steinberg dither | `aplite`, `diorite`, `flint` |
+
+All three derive from the same source video frames; the bw set lifts midtones so the mech survives Pebble's hard-threshold 1-bpp quantizer.
+
 ```sh
-# Regenerate frames for one mechos (rePebble nix-shell has ffmpeg + Pillow).
-# Variant suffix on the source filename picks the escave color:
-#   mech06.avi  = blue   (Fee, base)
-#   mech062.avi = green  (Zeex)
-#   mech063.avi = orange (Khox)
-python tools/build_mech_frames.py \
-  /path/to/VangersData/resource/video/mech062.avi \
-  resources/images \
-  --frames 6 --zoom 1.25 --prefix m1
+# Regenerate everything from a VangersData root:
+./tools/regenerate_assets.sh /path/to/VangersData
+# (defaults to /x/Work/VangersData if no arg passed)
 ```
 
-Each frame is a 200×150 paletted PNG (~2–3 KB on flash). 14 mechos × 6 frames ≈ 180 KB — fits emery's 256 KB resource budget with headroom.
+Under the hood this calls `tools/build_mech_frames.py` 42 times — once per (vehicle × size). The vehicle→video-variant mapping (m1–m5 → green Zeex videos, m6–m10 → orange Khox, m11–m14 → blue Fee base) lives in the bash array at the top of the script. To swap a single vehicle to a different colour, edit the `VSUFFIX` map (use `2` for the green variant, `3` for orange, empty for blue) and re-run.
+
+## Emulator workflow
+
+```sh
+# Build + install + screenshot a chosen platform, then clean up qemu:
+./tools/test_emulator.sh                  # defaults to emery
+./tools/test_emulator.sh aplite           # b/w 144×168 Pebble Original
+./tools/test_emulator.sh chalk shot.png   # round Pebble Time Round
+```
+
+The script resets each emulator's SPI flash from the SDK template before installing (works around the "Waiting for firmware to boot" hang that piles up after repeated app crashes), and always kills lingering qemu processes on exit so they don't spin at 100 % CPU in the background.
 
 ## Round-watch support (TODO)
 

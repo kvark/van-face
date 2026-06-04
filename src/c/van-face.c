@@ -3,6 +3,7 @@
 #define VEHICLE_COUNT 14
 #define FRAMES_PER_VEHICLE 6
 #define SETTINGS_KEY 1
+#define SESSION_INDEX_KEY 2
 
 // Time-of-day color groups (random + sequential modes draw from these). Slots
 // tile 24h with no gaps. `tm_hour` is always 0..23 regardless of clock format.
@@ -122,26 +123,47 @@ static int vehicle_for_session(uint32_t session) {
 }
 
 static int resolve_vehicle(void) {
-  if (s_settings.Vehicle <= 0) {  // 0 = random within current color group
-    return vehicle_for_session(s_session_index);
+  int chosen;
+  const char *mode;
+  if (s_settings.Vehicle <= 0) {
+    chosen = vehicle_for_session(s_session_index);
+    mode = "random";
+  } else if (s_settings.Vehicle == 1) {
+    chosen = vehicle_in_group(current_color_group(), (int)s_session_index);
+    mode = "sequential";
+  } else {
+    int idx = s_settings.Vehicle - 2;
+    if (idx < 0 || idx >= VEHICLE_COUNT) idx = 0;
+    chosen = idx;
+    mode = "pinned";
   }
-  if (s_settings.Vehicle == 1) {  // sequential within current color group
-    return vehicle_in_group(current_color_group(), (int)s_session_index);
-  }
-  // 2..15 = pin a specific vehicle (color-group-agnostic)
-  int idx = s_settings.Vehicle - 2;
-  if (idx < 0 || idx >= VEHICLE_COUNT) idx = 0;
-  return idx;
+  APP_LOG(APP_LOG_LEVEL_INFO,
+          "resolve_vehicle: mode=%s setting=%ld session=%lu group=%d -> m%d",
+          mode, (long)s_settings.Vehicle, (unsigned long)s_session_index,
+          current_color_group(), chosen + 1);
+  return chosen;
 }
 
 static void load_settings(void) {
   s_settings.Vehicle = 0;
   s_settings.FrameAdvanceSeconds = 5;
   persist_read_data(SETTINGS_KEY, &s_settings, sizeof(s_settings));
+  if (persist_exists(SESSION_INDEX_KEY)) {
+    s_session_index = (uint32_t)persist_read_int(SESSION_INDEX_KEY);
+  }
+  APP_LOG(APP_LOG_LEVEL_INFO,
+          "load_settings: Vehicle=%ld FrameAdv=%lds session_index=%lu",
+          (long)s_settings.Vehicle,
+          (long)s_settings.FrameAdvanceSeconds,
+          (unsigned long)s_session_index);
 }
 
 static void save_settings(void) {
   persist_write_data(SETTINGS_KEY, &s_settings, sizeof(s_settings));
+}
+
+static void save_session_index(void) {
+  persist_write_int(SESSION_INDEX_KEY, (int32_t)s_session_index);
 }
 
 static void show_frame(int frame) {
@@ -233,11 +255,6 @@ static void step_bar_update_proc(Layer *layer, GContext *ctx) {
   }
 }
 
-static void advance_one_frame(void) {
-  s_frame_index = (s_frame_index + 1) % FRAMES_PER_VEHICLE;
-  show_frame(s_frame_index);
-}
-
 static void update_time(void) {
   time_t now = time(NULL);
   struct tm *t = localtime(&now);
@@ -259,10 +276,12 @@ static void deactivate_cb(void *ctx) {
   s_active_timeout = NULL;
   s_active = false;
   apply_active_visual();
+  APP_LOG(APP_LOG_LEVEL_INFO, "deactivate: was vehicle=m%d", s_vehicle + 1);
   // Switch to next vehicle if the mode allows it. Frame stays at whatever
   // the compass last picked, so the new vehicle shows up at the same heading.
   if (s_settings.Vehicle <= 1) {  // 0 = random, 1 = sequential
     s_session_index++;
+    save_session_index();
     int next = resolve_vehicle();
     if (next != s_vehicle) {
       s_vehicle = next;
@@ -275,6 +294,7 @@ static void activate(void) {
   bool was_inactive = !s_active;
   s_active = true;
   if (was_inactive) apply_active_visual();
+  APP_LOG(APP_LOG_LEVEL_DEBUG, "activate: was_inactive=%d", (int)was_inactive);
   if (s_active_timeout) {
     app_timer_reschedule(s_active_timeout, ACTIVE_TIMEOUT_MS);
   } else {
@@ -293,10 +313,17 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   }
   // Re-pick the vehicle when the color group rolls over (noon, 6 pm, 2 am)
   // — but only in random/sequential modes; pinned vehicles ignore the clock.
+  // Also bump session_index so the random hash actually varies — without
+  // this, a user who never taps would see the same vehicle within a group
+  // forever.
   if (s_settings.Vehicle <= 1) {
     int cg = current_color_group();
     if (cg != s_last_color_group) {
+      APP_LOG(APP_LOG_LEVEL_INFO, "color group rollover: %d -> %d",
+              s_last_color_group, cg);
       s_last_color_group = cg;
+      s_session_index++;
+      save_session_index();
       s_vehicle = resolve_vehicle();
       s_frame_index = 0;
       show_frame(s_frame_index);
