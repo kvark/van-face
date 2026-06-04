@@ -70,32 +70,24 @@ static int s_last_color_group = -1;   // detect color-group rollover
 static bool s_active = false;
 static AppTimer *s_active_timeout = NULL;
 
-// Pebble's libc populates tm_hour AND honors %H according to the user's
-// clock-format preference, so both return 1..12 in 12h mode. To get a true
-// 24h hour for our time-of-day routing, reconstruct from %I (1..12) + %p
-// (AM/PM) when the preference is 12h.
+// PebbleOS's libc populates `tm_hour` AND `strftime("%H")` according to the
+// user's clock-format preference, so both return 1..12 in 12h mode. To get
+// a true 24h hour for our time-of-day routing, reconstruct from %I (1..12)
+// + %p (AM/PM) when the preference is 12h. See pebble-libc-12h-trap memory
+// note.
 static int compute_hour_24(void) {
   time_t now = time(NULL);
   struct tm *t = localtime(&now);
-  int h_tm = t->tm_hour;
-  int h_final;
-  char buf_H[4], buf_I[4], buf_p[8];
-  strftime(buf_H, sizeof(buf_H), "%H", t);
+  if (clock_is_24h_style()) {
+    char buf_H[4];
+    strftime(buf_H, sizeof(buf_H), "%H", t);
+    return atoi(buf_H);
+  }
+  char buf_I[4], buf_p[8];
   strftime(buf_I, sizeof(buf_I), "%I", t);
   strftime(buf_p, sizeof(buf_p), "%p", t);
-  int h_H = atoi(buf_H);
-  int h_I = atoi(buf_I);
   bool pm = (buf_p[0] == 'P' || buf_p[0] == 'p');
-
-  if (clock_is_24h_style()) {
-    h_final = h_H;  // user wants 24h — %H is what we want
-  } else {
-    h_final = (h_I % 12) + (pm ? 12 : 0);  // 12h preference: reconstruct
-  }
-  APP_LOG(APP_LOG_LEVEL_INFO,
-          "clock: tm_hour=%d %%H=%d %%I=%d %%p='%s' is24h=%d -> h=%d",
-          h_tm, h_H, h_I, buf_p, clock_is_24h_style(), h_final);
-  return h_final;
+  return (atoi(buf_I) % 12) + (pm ? 12 : 0);
 }
 
 static int current_color_group(void) {
@@ -123,39 +115,33 @@ static int vehicle_for_session(uint32_t session) {
 }
 
 static int resolve_vehicle(void) {
-  int chosen;
-  const char *mode;
   if (s_settings.Vehicle <= 0) {
-    chosen = vehicle_for_session(s_session_index);
-    mode = "random";
-  } else if (s_settings.Vehicle == 1) {
-    chosen = vehicle_in_group(current_color_group(), (int)s_session_index);
-    mode = "sequential";
-  } else {
-    int idx = s_settings.Vehicle - 2;
-    if (idx < 0 || idx >= VEHICLE_COUNT) idx = 0;
-    chosen = idx;
-    mode = "pinned";
+    return vehicle_for_session(s_session_index);
   }
-  APP_LOG(APP_LOG_LEVEL_INFO,
-          "resolve_vehicle: mode=%s setting=%ld session=%lu group=%d -> m%d",
-          mode, (long)s_settings.Vehicle, (unsigned long)s_session_index,
-          current_color_group(), chosen + 1);
-  return chosen;
+  if (s_settings.Vehicle == 1) {
+    return vehicle_in_group(current_color_group(), (int)s_session_index);
+  }
+  int idx = s_settings.Vehicle - 2;
+  if (idx < 0 || idx >= VEHICLE_COUNT) idx = 0;
+  return idx;
 }
 
 static void load_settings(void) {
   s_settings.Vehicle = 0;
   s_settings.FrameAdvanceSeconds = 5;
   persist_read_data(SETTINGS_KEY, &s_settings, sizeof(s_settings));
+  // Sanitize corrupted persist (e.g. Vehicle was read as a string pointer in
+  // pre-v1.0.12 builds and stored as a huge garbage int). Both fields are
+  // bounded enums; clamp anything out of range.
+  if (s_settings.Vehicle < 0 || s_settings.Vehicle > 15) {
+    s_settings.Vehicle = 0;
+  }
+  if (s_settings.FrameAdvanceSeconds < 0 || s_settings.FrameAdvanceSeconds > 3600) {
+    s_settings.FrameAdvanceSeconds = 5;
+  }
   if (persist_exists(SESSION_INDEX_KEY)) {
     s_session_index = (uint32_t)persist_read_int(SESSION_INDEX_KEY);
   }
-  APP_LOG(APP_LOG_LEVEL_INFO,
-          "load_settings: Vehicle=%ld FrameAdv=%lds session_index=%lu",
-          (long)s_settings.Vehicle,
-          (long)s_settings.FrameAdvanceSeconds,
-          (unsigned long)s_session_index);
 }
 
 static void save_settings(void) {
@@ -276,7 +262,6 @@ static void deactivate_cb(void *ctx) {
   s_active_timeout = NULL;
   s_active = false;
   apply_active_visual();
-  APP_LOG(APP_LOG_LEVEL_INFO, "deactivate: was vehicle=m%d", s_vehicle + 1);
   // Switch to next vehicle if the mode allows it. Frame stays at whatever
   // the compass last picked, so the new vehicle shows up at the same heading.
   if (s_settings.Vehicle <= 1) {  // 0 = random, 1 = sequential
@@ -294,7 +279,6 @@ static void activate(void) {
   bool was_inactive = !s_active;
   s_active = true;
   if (was_inactive) apply_active_visual();
-  APP_LOG(APP_LOG_LEVEL_DEBUG, "activate: was_inactive=%d", (int)was_inactive);
   if (s_active_timeout) {
     app_timer_reschedule(s_active_timeout, ACTIVE_TIMEOUT_MS);
   } else {
@@ -319,8 +303,6 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   if (s_settings.Vehicle <= 1) {
     int cg = current_color_group();
     if (cg != s_last_color_group) {
-      APP_LOG(APP_LOG_LEVEL_INFO, "color group rollover: %d -> %d",
-              s_last_color_group, cg);
       s_last_color_group = cg;
       s_session_index++;
       save_session_index();
@@ -338,16 +320,34 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   }
 }
 
+// Clay's <select> with numeric option values *sometimes* arrives as TUPLE_INT
+// and sometimes as TUPLE_CSTRING depending on JS/webview path. Read whichever
+// type the dict actually carries — reading int32 off a cstring tuple gives us
+// the string pointer cast as an int and silently corrupts persist storage.
+static int32_t tuple_to_int(Tuple *t, int32_t fallback) {
+  if (!t) return fallback;
+  switch (t->type) {
+    case TUPLE_INT:
+      return t->value->int32;
+    case TUPLE_UINT:
+      return (int32_t)t->value->uint32;
+    case TUPLE_CSTRING:
+      return (int32_t)atoi(t->value->cstring);
+    default:
+      return fallback;
+  }
+}
+
 static void inbox_received_callback(DictionaryIterator *iter, void *context) {
   bool changed = false;
   Tuple *v = dict_find(iter, MESSAGE_KEY_Vehicle);
   if (v) {
-    s_settings.Vehicle = v->value->int32;
+    s_settings.Vehicle = tuple_to_int(v, s_settings.Vehicle);
     changed = true;
   }
   Tuple *r = dict_find(iter, MESSAGE_KEY_FrameAdvanceSeconds);
   if (r) {
-    s_settings.FrameAdvanceSeconds = r->value->int32;
+    s_settings.FrameAdvanceSeconds = tuple_to_int(r, s_settings.FrameAdvanceSeconds);
     changed = true;
   }
   if (changed) {
