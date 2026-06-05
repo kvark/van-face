@@ -30,15 +30,16 @@ static const int COLOR_GROUP_SIZE[COLOR_GROUP_COUNT] = { 5, 5, 4 };
 // (random / sequential modes). Rotation is always compass-driven now.
 #define ACTIVE_TIMEOUT_MS  5000   // active state expires this long after last tap
 
-#define STEP_GOAL           10000  // daily step target — for the bottom bar
-#define STEP_BAR_HEIGHT     10     // px; bottom of the face. Segmented + framed.
-#define STEP_SEGMENTS       10     // one notch per 1000 steps
+#define STEP_GOAL           10000  // daily step target
 
-// Vangers-style "spiral charge" indicator: circle split into 6 pie slices,
-// each slice ≈ 17 % of battery. Sits in the top-right corner.
-#define SPIRAL_SIZE         28     // px; outer diameter
-#define SPIRAL_SEGMENTS     6
-#define SPIRAL_MARGIN       3      // px from the screen edge
+// Top-corner gauges in the style of Vangers' driving HUD: dark outer ring,
+// cream inner disc, coloured wedge that sweeps clockwise from 12 o'clock
+// proportional to the fill ratio. Steps gauge (top-left) sweeps black;
+// charge gauge (top-right) sweeps red.
+#define GAUGE_SIZE          32     // px; outer diameter
+#define GAUGE_MARGIN        3      // px from the screen edge
+#define TOP_STRIP_HEIGHT    (GAUGE_SIZE + GAUGE_MARGIN * 2)
+#define SPIRAL_SEGMENTS     6      // (kept symbol — charge gauge uses it for granularity)
 
 #define V(n) { RESOURCE_ID_M##n##_01, RESOURCE_ID_M##n##_02, RESOURCE_ID_M##n##_03, \
                RESOURCE_ID_M##n##_04, RESOURCE_ID_M##n##_05, RESOURCE_ID_M##n##_06 }
@@ -65,7 +66,7 @@ static Window *s_window;
 static BitmapLayer *s_mech_layer;
 static GBitmap *s_current_bitmap;
 static TextLayer *s_time_layer;
-static Layer *s_step_bar_layer;
+static Layer *s_steps_gauge_layer;
 static Layer *s_spiral_layer;
 static char s_time_text[8];
 static int s_battery_pct = 100;
@@ -173,15 +174,6 @@ static void show_frame(int frame) {
   }
 }
 
-static GColor color_for_group(int group) {
-  switch (group) {
-    case COLOR_GROUP_GREEN:  return COLOR_FALLBACK(GColorGreen,        GColorWhite);
-    case COLOR_GROUP_YELLOW: return COLOR_FALLBACK(GColorChromeYellow, GColorWhite);
-    case COLOR_GROUP_BLUE:   return COLOR_FALLBACK(GColorBlueMoon,     GColorWhite);
-  }
-  return GColorWhite;
-}
-
 // Compass-driven frame pick: the mech rotates so its "forward" always points
 // (magnetic) north as you turn your wrist. Each frame covers 360°/N of yaw.
 //
@@ -206,83 +198,62 @@ static void compass_handler(CompassHeadingData data) {
   }
 }
 
-// Spiral-charge indicator. Six pie slices arranged like a clock: slice 0
-// runs from 12 o'clock to 2 o'clock, then clockwise. Battery 100 % → all 6
-// filled; ≈17 % per slice. While charging the empty slices show a slightly
-// brighter track so the indicator reads as "filling up".
-static void spiral_update_proc(Layer *layer, GContext *ctx) {
-  GRect bounds = layer_get_bounds(layer);
-  int filled = (s_battery_pct * SPIRAL_SEGMENTS + 50) / 100;
-  if (filled > SPIRAL_SEGMENTS) filled = SPIRAL_SEGMENTS;
+// Vangers-style circular gauge: a thick dark outer ring, a cream inner disc,
+// and a coloured wedge growing clockwise from 12 o'clock to indicate the fill
+// ratio. Used for both top-corner gauges; only the wedge colour differs.
+static void draw_circular_gauge(GContext *ctx, GRect bounds,
+                                int fill_pct, GColor wedge_c) {
+  if (fill_pct < 0) fill_pct = 0;
+  if (fill_pct > 100) fill_pct = 100;
+  GPoint c = GPoint(bounds.size.w / 2, bounds.size.h / 2);
+  int outer_r = bounds.size.w / 2;
+  int inner_r = outer_r - 3;  // 3 px outer ring
 
-  GColor fill_c  = COLOR_FALLBACK(GColorChromeYellow, GColorWhite);
-  GColor track_c = COLOR_FALLBACK(s_battery_charging ? GColorWindsorTan
-                                                      : GColorBulgarianRose,
-                                  GColorBlack);
+  // Outer dark ring
+  graphics_context_set_fill_color(ctx, COLOR_FALLBACK(GColorOxfordBlue, GColorBlack));
+  graphics_fill_circle(ctx, c, outer_r);
 
-  // 2° gap between slices for visual definition.
-  const int32_t gap = TRIG_MAX_ANGLE * 2 / 360;
-  for (int i = 0; i < SPIRAL_SEGMENTS; i++) {
-    int32_t start = (TRIG_MAX_ANGLE * i)       / SPIRAL_SEGMENTS + gap;
-    int32_t end   = (TRIG_MAX_ANGLE * (i + 1)) / SPIRAL_SEGMENTS - gap;
-    graphics_context_set_fill_color(ctx, (i < filled) ? fill_c : track_c);
-    graphics_fill_radial(ctx, bounds, GOvalScaleModeFitCircle,
-                         bounds.size.w / 2, start, end);
+  // Cream inner disc
+  graphics_context_set_fill_color(ctx, COLOR_FALLBACK(GColorPastelYellow, GColorWhite));
+  graphics_fill_circle(ctx, c, inner_r);
+
+  // Pie-wedge fill, sweeping clockwise from 12 o'clock
+  if (fill_pct > 0) {
+    int32_t end_angle = (int32_t)((int64_t)TRIG_MAX_ANGLE * fill_pct / 100);
+    graphics_context_set_fill_color(ctx, wedge_c);
+    GRect inner_box = GRect(bounds.origin.x + (outer_r - inner_r),
+                            bounds.origin.y + (outer_r - inner_r),
+                            inner_r * 2, inner_r * 2);
+    graphics_fill_radial(ctx, inner_box, GOvalScaleModeFitCircle,
+                         inner_r, 0, end_angle);
   }
-  // Thin outline so the disc reads even on dark mech pixels.
-  graphics_context_set_stroke_color(ctx, COLOR_FALLBACK(GColorLightGray, GColorWhite));
-  graphics_draw_circle(ctx, GPoint(bounds.size.w / 2, bounds.size.h / 2),
-                       bounds.size.w / 2);
 }
 
-static void battery_handler(BatteryChargeState state) {
-  s_battery_pct = state.charge_percent;
-  s_battery_charging = state.is_charging;
-  if (s_spiral_layer) layer_mark_dirty(s_spiral_layer);
-}
-
-// Step bar in Vangers-gauge style: a thin light frame around a dark inset,
-// the inset divided into 10 vertical segments separated by 1 px gutters.
-// Filled segments are the current color group; empty are deep-red track.
-// Roughly resembles the in-game ammo / gun-charge readouts.
-static void step_bar_update_proc(Layer *layer, GContext *ctx) {
-  GRect bounds = layer_get_bounds(layer);
-
-  // Outer frame
-  GColor frame_c = COLOR_FALLBACK(GColorLightGray, GColorWhite);
-  graphics_context_set_stroke_color(ctx, frame_c);
-  graphics_draw_rect(ctx, bounds);
-
-  // 1 px inset all around → segmented area
-  GRect inner = GRect(bounds.origin.x + 1, bounds.origin.y + 1,
-                      bounds.size.w - 2, bounds.size.h - 2);
-  // Dark track
-  graphics_context_set_fill_color(ctx, COLOR_FALLBACK(GColorBulgarianRose, GColorBlack));
-  graphics_fill_rect(ctx, inner, 0, GCornerNone);
-
-  // Steps
+static void steps_gauge_update_proc(Layer *layer, GContext *ctx) {
   int steps = 0;
   HealthServiceAccessibilityMask access = health_service_metric_accessible(
       HealthMetricStepCount, time_start_of_today(), time(NULL));
   if (access & HealthServiceAccessibilityMaskAvailable) {
     steps = (int)health_service_sum_today(HealthMetricStepCount);
   }
-  if (steps > STEP_GOAL) steps = STEP_GOAL;
-  int filled_segs = (steps * STEP_SEGMENTS + STEP_GOAL / 2) / STEP_GOAL;
+  int pct = (steps >= STEP_GOAL) ? 100 : (steps * 100 / STEP_GOAL);
+  draw_circular_gauge(ctx, layer_get_bounds(layer), pct,
+                      COLOR_FALLBACK(GColorBlack, GColorBlack));
+}
 
-  // One segment per 1000 steps. Gutters between segments make it read as a
-  // chunky readout, not a slick continuous bar.
-  int total_gutter = STEP_SEGMENTS - 1;        // 1 px between adjacent segs
-  int seg_w_total = inner.size.w - total_gutter;
-  GColor fill_c = color_for_group(current_color_group());
-  graphics_context_set_fill_color(ctx, fill_c);
-  for (int i = 0; i < filled_segs; i++) {
-    int seg_x = inner.origin.x + (i * seg_w_total) / STEP_SEGMENTS + i;
-    int seg_end = inner.origin.x + ((i + 1) * seg_w_total) / STEP_SEGMENTS + i;
-    graphics_fill_rect(ctx, GRect(seg_x, inner.origin.y,
-                                   seg_end - seg_x, inner.size.h),
-                       0, GCornerNone);
-  }
+static void spiral_update_proc(Layer *layer, GContext *ctx) {
+  // Red wedge for charge — matches the Vangers HUD palette. While charging
+  // the wedge brightens slightly so the indicator reads as filling.
+  GColor wedge = COLOR_FALLBACK(
+      s_battery_charging ? GColorRed : GColorDarkCandyAppleRed,
+      GColorWhite);
+  draw_circular_gauge(ctx, layer_get_bounds(layer), s_battery_pct, wedge);
+}
+
+static void battery_handler(BatteryChargeState state) {
+  s_battery_pct = state.charge_percent;
+  s_battery_charging = state.is_charging;
+  if (s_spiral_layer) layer_mark_dirty(s_spiral_layer);
 }
 
 static void update_time(void) {
@@ -337,7 +308,7 @@ static void tap_handler(AccelAxisType axis, int32_t direction) {
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   if (units_changed & MINUTE_UNIT) {
     update_time();
-    if (s_step_bar_layer) layer_mark_dirty(s_step_bar_layer);
+    if (s_steps_gauge_layer) layer_mark_dirty(s_steps_gauge_layer);
   }
   // Re-pick the vehicle when the color group rolls over (noon, 6 pm, 2 am)
   // — but only in random/sequential modes; pinned vehicles ignore the clock.
@@ -353,7 +324,7 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
       s_vehicle = resolve_vehicle();
       s_frame_index = 0;
       show_frame(s_frame_index);
-      if (s_step_bar_layer) layer_mark_dirty(s_step_bar_layer);  // re-tints
+      if (s_steps_gauge_layer) layer_mark_dirty(s_steps_gauge_layer);
     }
   }
   if ((units_changed & DAY_UNIT) && s_settings.Vehicle == 0) {
@@ -420,10 +391,11 @@ static void window_load(Window *window) {
   layer_add_child(root, bitmap_layer_get_layer(s_mech_layer));
   show_frame(s_frame_index);
 
+  // Mech sits below the top-strip so the corner gauges have clear backdrop.
   if (s_current_bitmap) {
     GSize fs = gbitmap_get_bounds(s_current_bitmap).size;
     GRect mech_rect = (GRect){
-      .origin = { (bounds.size.w - fs.w) / 2, 0 },
+      .origin = { (bounds.size.w - fs.w) / 2, TOP_STRIP_HEIGHT },
       .size   = fs,
     };
     layer_set_frame(bitmap_layer_get_layer(s_mech_layer), mech_rect);
@@ -431,32 +403,35 @@ static void window_load(Window *window) {
 
   GSize fs = s_current_bitmap ? gbitmap_get_bounds(s_current_bitmap).size
                               : (GSize){ bounds.size.w, bounds.size.h / 2 };
-  int16_t time_top = fs.h;
-  // Leave room at the very bottom for the step progress bar.
-  int16_t time_h = bounds.size.h - time_top - STEP_BAR_HEIGHT;
+  int16_t time_top = TOP_STRIP_HEIGHT + fs.h;
+  int16_t time_h = bounds.size.h - time_top;
+  // BITHAM_42 needs ≥42 px; smaller screens fall back to GOTHIC_28.
+  const char *font_key = (time_h >= 42) ? FONT_KEY_BITHAM_42_BOLD : FONT_KEY_GOTHIC_28_BOLD;
   s_time_layer = text_layer_create(GRect(0, time_top, bounds.size.w, time_h));
   text_layer_set_background_color(s_time_layer, GColorClear);
   text_layer_set_text_alignment(s_time_layer, GTextAlignmentCenter);
-  text_layer_set_font(s_time_layer, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
+  text_layer_set_font(s_time_layer, fonts_get_system_font(font_key));
   layer_add_child(root, text_layer_get_layer(s_time_layer));
   apply_active_visual();
   update_time();
 
-  s_step_bar_layer = layer_create(GRect(0, bounds.size.h - STEP_BAR_HEIGHT,
-                                         bounds.size.w, STEP_BAR_HEIGHT));
-  layer_set_update_proc(s_step_bar_layer, step_bar_update_proc);
-  layer_add_child(root, s_step_bar_layer);
+  // Top-left: daily steps gauge (black wedge fills as you walk).
+  s_steps_gauge_layer = layer_create(GRect(GAUGE_MARGIN, GAUGE_MARGIN,
+                                           GAUGE_SIZE, GAUGE_SIZE));
+  layer_set_update_proc(s_steps_gauge_layer, steps_gauge_update_proc);
+  layer_add_child(root, s_steps_gauge_layer);
 
+  // Top-right: battery (red wedge — Vangers HUD style).
   s_spiral_layer = layer_create(GRect(
-      bounds.size.w - SPIRAL_SIZE - SPIRAL_MARGIN, SPIRAL_MARGIN,
-      SPIRAL_SIZE, SPIRAL_SIZE));
+      bounds.size.w - GAUGE_SIZE - GAUGE_MARGIN, GAUGE_MARGIN,
+      GAUGE_SIZE, GAUGE_SIZE));
   layer_set_update_proc(s_spiral_layer, spiral_update_proc);
   layer_add_child(root, s_spiral_layer);
 }
 
 static void window_unload(Window *window) {
   if (s_spiral_layer) layer_destroy(s_spiral_layer);
-  if (s_step_bar_layer) layer_destroy(s_step_bar_layer);
+  if (s_steps_gauge_layer) layer_destroy(s_steps_gauge_layer);
   text_layer_destroy(s_time_layer);
   bitmap_layer_destroy(s_mech_layer);
   if (s_current_bitmap) gbitmap_destroy(s_current_bitmap);
