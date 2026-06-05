@@ -34,6 +34,12 @@ static const int COLOR_GROUP_SIZE[COLOR_GROUP_COUNT] = { 5, 5, 4 };
 #define STEP_BAR_HEIGHT     10     // px; bottom of the face. Segmented + framed.
 #define STEP_SEGMENTS       10     // one notch per 1000 steps
 
+// Vangers-style "spiral charge" indicator: circle split into 6 pie slices,
+// each slice ≈ 17 % of battery. Sits in the top-right corner.
+#define SPIRAL_SIZE         28     // px; outer diameter
+#define SPIRAL_SEGMENTS     6
+#define SPIRAL_MARGIN       3      // px from the screen edge
+
 #define V(n) { RESOURCE_ID_M##n##_01, RESOURCE_ID_M##n##_02, RESOURCE_ID_M##n##_03, \
                RESOURCE_ID_M##n##_04, RESOURCE_ID_M##n##_05, RESOURCE_ID_M##n##_06 }
 
@@ -60,7 +66,10 @@ static BitmapLayer *s_mech_layer;
 static GBitmap *s_current_bitmap;
 static TextLayer *s_time_layer;
 static Layer *s_step_bar_layer;
+static Layer *s_spiral_layer;
 static char s_time_text[8];
+static int s_battery_pct = 100;
+static bool s_battery_charging = false;
 
 static int s_vehicle = 0;
 static int s_frame_index = 0;
@@ -195,6 +204,41 @@ static void compass_handler(CompassHeadingData data) {
     s_frame_index = new_frame;
     show_frame(s_frame_index);
   }
+}
+
+// Spiral-charge indicator. Six pie slices arranged like a clock: slice 0
+// runs from 12 o'clock to 2 o'clock, then clockwise. Battery 100 % → all 6
+// filled; ≈17 % per slice. While charging the empty slices show a slightly
+// brighter track so the indicator reads as "filling up".
+static void spiral_update_proc(Layer *layer, GContext *ctx) {
+  GRect bounds = layer_get_bounds(layer);
+  int filled = (s_battery_pct * SPIRAL_SEGMENTS + 50) / 100;
+  if (filled > SPIRAL_SEGMENTS) filled = SPIRAL_SEGMENTS;
+
+  GColor fill_c  = COLOR_FALLBACK(GColorChromeYellow, GColorWhite);
+  GColor track_c = COLOR_FALLBACK(s_battery_charging ? GColorWindsorTan
+                                                      : GColorBulgarianRose,
+                                  GColorBlack);
+
+  // 2° gap between slices for visual definition.
+  const int32_t gap = TRIG_MAX_ANGLE * 2 / 360;
+  for (int i = 0; i < SPIRAL_SEGMENTS; i++) {
+    int32_t start = (TRIG_MAX_ANGLE * i)       / SPIRAL_SEGMENTS + gap;
+    int32_t end   = (TRIG_MAX_ANGLE * (i + 1)) / SPIRAL_SEGMENTS - gap;
+    graphics_context_set_fill_color(ctx, (i < filled) ? fill_c : track_c);
+    graphics_fill_radial(ctx, bounds, GOvalScaleModeFitCircle,
+                         bounds.size.w / 2, start, end);
+  }
+  // Thin outline so the disc reads even on dark mech pixels.
+  graphics_context_set_stroke_color(ctx, COLOR_FALLBACK(GColorLightGray, GColorWhite));
+  graphics_draw_circle(ctx, GPoint(bounds.size.w / 2, bounds.size.h / 2),
+                       bounds.size.w / 2);
+}
+
+static void battery_handler(BatteryChargeState state) {
+  s_battery_pct = state.charge_percent;
+  s_battery_charging = state.is_charging;
+  if (s_spiral_layer) layer_mark_dirty(s_spiral_layer);
 }
 
 // Step bar in Vangers-gauge style: a thin light frame around a dark inset,
@@ -402,9 +446,16 @@ static void window_load(Window *window) {
                                          bounds.size.w, STEP_BAR_HEIGHT));
   layer_set_update_proc(s_step_bar_layer, step_bar_update_proc);
   layer_add_child(root, s_step_bar_layer);
+
+  s_spiral_layer = layer_create(GRect(
+      bounds.size.w - SPIRAL_SIZE - SPIRAL_MARGIN, SPIRAL_MARGIN,
+      SPIRAL_SIZE, SPIRAL_SIZE));
+  layer_set_update_proc(s_spiral_layer, spiral_update_proc);
+  layer_add_child(root, s_spiral_layer);
 }
 
 static void window_unload(Window *window) {
+  if (s_spiral_layer) layer_destroy(s_spiral_layer);
   if (s_step_bar_layer) layer_destroy(s_step_bar_layer);
   text_layer_destroy(s_time_layer);
   bitmap_layer_destroy(s_mech_layer);
@@ -429,11 +480,18 @@ static void init(void) {
   compass_service_set_heading_filter((TRIG_MAX_ANGLE * 70) / 360);
   compass_service_subscribe(compass_handler);
 
+  // Seed the initial battery reading and subscribe for changes.
+  BatteryChargeState bs = battery_state_service_peek();
+  s_battery_pct = bs.charge_percent;
+  s_battery_charging = bs.is_charging;
+  battery_state_service_subscribe(battery_handler);
+
   app_message_register_inbox_received(inbox_received_callback);
   app_message_open(128, 128);
 }
 
 static void deinit(void) {
+  battery_state_service_unsubscribe();
   compass_service_unsubscribe();
   accel_tap_service_unsubscribe();
   tick_timer_service_unsubscribe();
