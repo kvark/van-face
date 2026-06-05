@@ -198,34 +198,52 @@ static void compass_handler(CompassHeadingData data) {
   }
 }
 
-// Vangers-style circular gauge: a thick dark outer ring, a cream inner disc,
-// and a coloured wedge growing clockwise from 12 o'clock to indicate the fill
-// ratio. Used for both top-corner gauges; only the wedge colour differs.
+// Vangers-style circular gauge: a thin metallic outer ring around a black
+// inner disc, with a coloured wedge sweeping clockwise from 12 o'clock that
+// grows as the fill ratio increases. Optionally stipples the wedge with a
+// black checker pattern to halve its visual intensity (used for the charge
+// gauge so the red doesn't dominate the face).
 static void draw_circular_gauge(GContext *ctx, GRect bounds,
-                                int fill_pct, GColor wedge_c) {
+                                int fill_pct, GColor wedge_c, bool dither) {
   if (fill_pct < 0) fill_pct = 0;
   if (fill_pct > 100) fill_pct = 100;
-  GPoint c = GPoint(bounds.size.w / 2, bounds.size.h / 2);
+  GPoint c = GPoint(bounds.origin.x + bounds.size.w / 2,
+                    bounds.origin.y + bounds.size.h / 2);
   int outer_r = bounds.size.w / 2;
-  int inner_r = outer_r - 3;  // 3 px outer ring
+  int inner_r = outer_r - 2;  // 2 px metallic bezel
 
-  // Outer dark ring
-  graphics_context_set_fill_color(ctx, COLOR_FALLBACK(GColorOxfordBlue, GColorBlack));
+  // Outer ring (metallic bezel — light gray reads against the black mech bg)
+  graphics_context_set_fill_color(ctx, COLOR_FALLBACK(GColorLightGray, GColorWhite));
   graphics_fill_circle(ctx, c, outer_r);
 
-  // Cream inner disc
-  graphics_context_set_fill_color(ctx, COLOR_FALLBACK(GColorPastelYellow, GColorWhite));
+  // Inner disc (black — represents the empty/0 % state)
+  graphics_context_set_fill_color(ctx, GColorBlack);
   graphics_fill_circle(ctx, c, inner_r);
 
-  // Pie-wedge fill, sweeping clockwise from 12 o'clock
-  if (fill_pct > 0) {
-    int32_t end_angle = (int32_t)((int64_t)TRIG_MAX_ANGLE * fill_pct / 100);
-    graphics_context_set_fill_color(ctx, wedge_c);
-    GRect inner_box = GRect(bounds.origin.x + (outer_r - inner_r),
-                            bounds.origin.y + (outer_r - inner_r),
-                            inner_r * 2, inner_r * 2);
-    graphics_fill_radial(ctx, inner_box, GOvalScaleModeFitCircle,
-                         inner_r, 0, end_angle);
+  if (fill_pct == 0) return;
+
+  // Pie-wedge fill, sweeping clockwise from 12 o'clock.
+  int32_t end_angle = (int32_t)((int64_t)TRIG_MAX_ANGLE * fill_pct / 100);
+  graphics_context_set_fill_color(ctx, wedge_c);
+  GRect inner_box = GRect(bounds.origin.x + (outer_r - inner_r),
+                          bounds.origin.y + (outer_r - inner_r),
+                          inner_r * 2, inner_r * 2);
+  graphics_fill_radial(ctx, inner_box, GOvalScaleModeFitCircle,
+                       inner_r, 0, end_angle);
+
+  if (dither) {
+    // Black checker stipple over the inner disc — every other pixel inside
+    // the inner radius becomes black, halving the apparent wedge intensity.
+    // Black-on-black where there's no wedge is a no-op, so this only affects
+    // the wedge visually. ~800 pixel ops for a 32 px disc, cheap on M33.
+    graphics_context_set_stroke_color(ctx, GColorBlack);
+    for (int dy = -inner_r; dy <= inner_r; dy++) {
+      for (int dx = -inner_r; dx <= inner_r; dx++) {
+        if (dx * dx + dy * dy > inner_r * inner_r) continue;
+        if (((dx + dy) & 1) == 0) continue;
+        graphics_draw_pixel(ctx, GPoint(c.x + dx, c.y + dy));
+      }
+    }
   }
 }
 
@@ -238,16 +256,14 @@ static void steps_gauge_update_proc(Layer *layer, GContext *ctx) {
   }
   int pct = (steps >= STEP_GOAL) ? 100 : (steps * 100 / STEP_GOAL);
   draw_circular_gauge(ctx, layer_get_bounds(layer), pct,
-                      COLOR_FALLBACK(GColorBlack, GColorBlack));
+                      COLOR_FALLBACK(GColorWhite, GColorWhite), false);
 }
 
 static void spiral_update_proc(Layer *layer, GContext *ctx) {
-  // Red wedge for charge — matches the Vangers HUD palette. While charging
-  // the wedge brightens slightly so the indicator reads as filling.
-  GColor wedge = COLOR_FALLBACK(
-      s_battery_charging ? GColorRed : GColorDarkCandyAppleRed,
-      GColorWhite);
-  draw_circular_gauge(ctx, layer_get_bounds(layer), s_battery_pct, wedge);
+  // Red wedge for charge, stippled to halve its visual intensity — Vangers
+  // HUD reds were already dim, and the pebble64 pure red is loud at 32 px.
+  draw_circular_gauge(ctx, layer_get_bounds(layer), s_battery_pct,
+                      COLOR_FALLBACK(GColorRed, GColorWhite), true);
 }
 
 static void battery_handler(BatteryChargeState state) {
